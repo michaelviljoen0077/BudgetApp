@@ -1,0 +1,169 @@
+{
+  "merchants": {
+    "670e2f39-8ca2-41d7-97d1-38291c9bc975": {
+      "name": "kfc mb bryanston 2 gauteng za",
+      "preferred_category": "Restaurants & Takeout",
+      "aliases": [
+        "kfc mb bryanston 2 gauteng za"
+      ],
+      "confidence": 1.0,
+      "id": "670e2f39-8ca2-41d7-97d1-38291c9bc975",
+      "created_at": "2025-12-15T18:29:41.247817",
+      "updated_at": "2025-12-15T18:29:41.247817"
+    },
+    "ea227481-af82-449d-b5b7-83549d993cd9": {
+      "name": "bryanston service city johannesburg za",
+      "preferred_category": "Petrol/Diesel",
+      "aliases": [
+        "bryanston service city johannesburg za"
+      ],
+      "confidence": 1.0,
+      "id": "ea227481-af82-449d-b5b7-83549d993cd9",
+      "created_at": "2025-12-15T18:37:16.128790",
+      "updated_at": "2025-12-15T18:37:16.128790"
+    },
+    "9c5019da-5128-4070-b152-4dda6eb5e366": {
+      "name": "r brown - liam rent",
+      "preferred_category": "Reimbursement",
+      "aliases": [
+        "r brown - liam rent"
+      ],
+      "confidence": 1.0,
+      "id": "9c5019da-5128-4070-b152-4dda6eb5e366",
+      "created_at": "2025-12-15T18:52:00.129960",
+      "updated_at": "2025-12-15T18:52:00.129960"
+    },
+    "f65ee8cf-3ed8-45b6-a9b1-16012e5ad911": {
+      "name": "angelrentjan",
+      "preferred_category": "Reimbursement",
+      "aliases": [
+        "angelrentjan"
+      ],
+      "confidence": 1.0,
+      "id": "f65ee8cf-3ed8-45b6-a9b1-16012e5ad911",
+      "created_at": "2025-12-15T19:02:43.555024",
+      "updated_at": "2025-12-15T19:02:43.555024"
+    },
+    "baeb89f9-91aa-42c2-aa13-02dfc6f413f6": {
+      "name": "yoco   *boho beach co johannesburg za",
+      "preferred_category": "Restaurants & Takeout",
+      "aliases": [
+        "yoco   *boho beach co johannesburg za"
+      ],
+      "confidence": 1.0,
+      "id": "baeb89f9-91aa-42c2-aa13-02dfc6f413f6",
+      "created_at": "2025-12-15T19:04:33.123156",
+      "updated_at": "2025-12-15T19:04:33.123156"
+    },
+    "20bd791f-c982-49d7-bd97-c318377e3a1f": {
+      "name": "millstream dullstroom za",
+      "preferred_category": "Entertainment",
+      "aliases": [
+        "millstream dullstroom za"
+      ],
+      "confidence": 1.0,
+      "id": "20bd791f-c982-49d7-bd97-c318377e3a1f",
+      "created_at": "2025-12-15T20:34:03.147096",
+      "updated_at": "2025-12-15T20:34:03.315904"
+    },
+    "91b13616-a065-46a9-bcc6-2224d6ebf966": {
+      "name": "the braai room lonehill za",
+      "preferred_category": "Jolling",
+      "aliases": [
+        "the braai room lonehill za"
+      ],
+      "confidence": 1.0,
+      "id": "91b13616-a065-46a9-bcc6-2224d6ebf966",
+      "created_at": "2025-12-15T20:57:59.317524",
+      "updated_at": "2025-12-15T20:57:59.317524"
+    },
+    "b90f8c57-ea5e-4723-85d4-df5591d5696a": {
+      "name": "checkers fresh x desig sandton za",
+      "preferred_category": "Groceries",
+      "aliases": [
+        "checkers fresh x desig sandton za"
+      ],
+      "confidence": 1.0,
+      "id": "b90f8c57-ea5e-4723-85d4-df5591d5696a",
+      "created_at": "2025-12-15T20:58:08.398346",
+      "updated_at": "2025-12-15T20:58:08.398346"
+    },
+    "91acec29-3ac0-494a-8ac7-d391ae71f11b": {
+      "name": "lsb fourways lonehill za",
+      "preferred_category": "Jolling",
+      "aliases": [
+        "lsb fourways lonehill za"
+      ],
+      "confidence": 1.0,
+      "id": "91acec29-3ac0-494a-8ac7-d391ae71f11b",
+      "created_at": "2025-12-15T20:58:54.117053",
+      "updated_at": "2025-12-15T20:58:54.117053"
+    },
+    "5d37ba62-d05d-443a-9857-c35cb6c268e4": {
+      "name": "fnb",
+      "preferred_category": "Admin",
+      "aliases": [
+        "fnb"
+      ],
+      "confidence": 1.0,
+      "id": "5d37ba62-d05d-443a-9857-c35cb6c268e4",
+      "created_at": "2025-12-15T20:59:36.238144",
+      "updated_at": "2025-12-15T20:59:36.344640"
+    },
+    "fec73593-0df8-4f04-9ad6-081a47442c4d": {
+      "name": "tim's present",
+      "preferred_category": "Gifts",
+      "aliases": [
+        "tim's present"
+      ],
+      "confidence": 1.0,
+      "id": "fec73593-0df8-4f04-9ad6-081a47442c4d",
+      "created_at": "2025-12-15T21:00:53.835498",
+      "updated_at": "2025-12-15T21:00:53.835498"
+    },
+    "a83ae885-bd47-4d3d-b333-f5208be001e1": {
+      "name": "middleburg tap n go irene za",
+      "preferred_category": "Tolls",
+      "aliases": [
+        "middleburg tap n go irene za"
+      ],
+      "confidence": 1.0,
+      "id": "a83ae885-bd47-4d3d-b333-f5208be001e1",
+      "created_at": "2025-12-15T21:02:12.640608",
+      "updated_at": "2025-12-15T21:02:12.640608"
+    },
+    "4fa898dd-7713-4923-ade6-b3881af945a6": {
+      "name": "caversham hill",
+      "preferred_category": "Subscriptions",
+      "aliases": [
+        "caversham hill"
+      ],
+      "confidence": 1.0,
+      "id": "4fa898dd-7713-4923-ade6-b3881af945a6",
+      "created_at": "2025-12-15T21:04:31.915069",
+      "updated_at": "2025-12-15T21:04:32.514520"
+    },
+    "1db348ae-7cf7-4af4-83fb-83b2f0d8896d": {
+      "name": "cross-border card fee - disney plus",
+      "preferred_category": "Subscriptions",
+      "aliases": [
+        "cross-border card fee - disney plus"
+      ],
+      "confidence": 1.0,
+      "id": "1db348ae-7cf7-4af4-83fb-83b2f0d8896d",
+      "created_at": "2025-12-15T21:04:56.639657",
+      "updated_at": "2025-12-15T21:04:57.168335"
+    },
+    "67e2a866-a95a-42ab-845a-505d27b3a1c8": {
+      "name": "jacks paint bryanston bryanston za",
+      "preferred_category": "maintainance",
+      "aliases": [
+        "jacks paint bryanston bryanston za"
+      ],
+      "confidence": 1.0,
+      "id": "67e2a866-a95a-42ab-845a-505d27b3a1c8",
+      "created_at": "2025-12-15T21:06:10.670936",
+      "updated_at": "2025-12-15T21:06:10.670936"
+    }
+  }
+}

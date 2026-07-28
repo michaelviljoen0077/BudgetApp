@@ -1,0 +1,5 @@
+PySide6==6.6.1
+httpx==0.25.1
+python-dateutil==2.8.2
+requests==2.31.0
+matplotlib==3.8.0
