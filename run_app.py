@@ -1,81 +1,53 @@
 #!/usr/bin/env python3
-"""
-Launch both backend and frontend for Budget App.
-Starts backend server, then opens desktop UI.
-"""
+"""Start the backend, wait until it is healthy, then open the desktop UI. Closing the UI stops both."""
 import subprocess
 import sys
-import os
 import time
-import requests
+import urllib.request
 from pathlib import Path
 
-def check_backend_health(max_attempts=10):
-    """Check if backend is responding."""
-    url = "http://localhost:8000/health"
-    for i in range(max_attempts):
-        try:
-            response = requests.get(url, timeout=1)
-            if response.status_code == 200:
-                return True
-        except requests.exceptions.RequestException:
-            pass
-        time.sleep(1)
-    return False
+ROOT = Path(__file__).resolve().parent
+HEALTH_URL = "http://127.0.0.1:8000/health"
+
+
+def backend_is_healthy() -> bool:
+    try:
+        with urllib.request.urlopen(HEALTH_URL, timeout=1) as response:
+            return response.status == 200
+    except OSError:
+        return False
+
 
 def main():
-    print("🧾 Budget App Launcher")
-    print("=" * 50)
-    
-    backend_process = None
-    
+    backend = None
+    if backend_is_healthy():
+        print("Backend already running.")
+    else:
+        print("Starting backend...")
+        backend = subprocess.Popen([sys.executable, str(ROOT / "run_backend.py")])
+        for _ in range(20):
+            if backend_is_healthy():
+                break
+            if backend.poll() is not None:
+                sys.exit("Backend exited during startup; run `python run_backend.py` to see why.")
+            time.sleep(0.5)
+        else:
+            backend.terminate()
+            sys.exit("Backend did not become healthy within 10 seconds.")
+
     try:
-        # Start backend in subprocess
-        print("\n📡 Starting backend server...")
-        backend_process = subprocess.Popen(
-            [sys.executable, "run_backend.py"],
-            cwd=Path(__file__).parent
-        )
-        
-        # Wait for backend to start and respond
-        print("⏳ Waiting for backend to start...")
-        if not check_backend_health():
-            print("❌ Backend failed to start or is not responding")
-            print("   Try running manually: python run_backend.py")
-            sys.exit(1)
-        
-        print("✅ Backend running on http://localhost:8000")
-        
-        # Start frontend in main process
-        print("\n🖥️  Starting frontend...")
-        frontend_process = subprocess.Popen(
-            [sys.executable, "run_frontend.py"],
-            cwd=Path(__file__).parent
-        )
-        
-        print("✅ Frontend launched")
-        print("\n🎉 Budget App is running!")
-        print("   Backend:  http://localhost:8000")
-        print("   API Docs: http://localhost:8000/docs")
-        print("\nPress Ctrl+C to stop both services")
-        
-        # Wait for frontend to close
-        frontend_process.wait()
-        
+        subprocess.run([sys.executable, str(ROOT / "run_frontend.py")])
     except KeyboardInterrupt:
-        print("\n\n⏹️  Stopping Budget App...")
-    
+        pass
     finally:
-        # Clean up processes
-        if backend_process and backend_process.poll() is None:
+        if backend and backend.poll() is None:
             print("Stopping backend...")
-            backend_process.terminate()
+            backend.terminate()
             try:
-                backend_process.wait(timeout=5)
+                backend.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                backend_process.kill()
-        
-        print("✅ Budget App stopped")
+                backend.kill()
+
 
 if __name__ == "__main__":
     main()

@@ -3,59 +3,68 @@ JSON-based storage layer for the Budget App.
 Handles atomic reads and writes for ledger, categories, budgets, and merchants.
 """
 import json
+import os
+import tempfile
 import uuid
-from pathlib import Path
-from typing import Dict, List, Optional, Any
 from datetime import datetime
 from decimal import Decimal
-import tempfile
-import shutil
-from functools import wraps
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+# Data lives next to this module regardless of the current working directory.
+DEFAULT_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 class StorageError(Exception):
     """Base exception for storage operations."""
-    pass
+
+
+class NotFoundError(StorageError):
+    """Raised when a requested record does not exist."""
 
 
 class DecimalEncoder(json.JSONEncoder):
-    """JSON encoder that handles Decimal types."""
+    """JSON encoder that handles Decimal and datetime types."""
+
     def default(self, obj):
         if isinstance(obj, Decimal):
             return float(obj)
-        elif isinstance(obj, datetime):
+        if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
+
+
+def _now() -> str:
+    return datetime.utcnow().isoformat()
 
 
 class Storage:
     """Manages JSON file storage with atomic writes."""
 
-    def __init__(self, data_dir: str = "data"):
-        self.data_dir = Path(data_dir)
+    def __init__(self, data_dir: Optional[os.PathLike] = None):
+        self.data_dir = Path(data_dir) if data_dir else DEFAULT_DATA_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.ledger_file = self.data_dir / "ledger.json"
         self.categories_file = self.data_dir / "categories.json"
         self.budgets_file = self.data_dir / "budgets.json"
         self.merchants_file = self.data_dir / "merchants.json"
-        
-        # Initialize files if they don't exist
+        self.ignored_duplicates_file = self.data_dir / "ignored_duplicates.json"
+
         self._ensure_files_exist()
 
     def _ensure_files_exist(self):
         """Ensure all storage files exist with proper initial structure."""
-        if not self.ledger_file.exists():
-            self._atomic_write(self.ledger_file, {"transactions": []})
-        
-        if not self.categories_file.exists():
-            self._atomic_write(self.categories_file, {"nodes": {}, "root_ids": []})
-        
-        if not self.budgets_file.exists():
-            self._atomic_write(self.budgets_file, {"budgets": []})
-        
-        if not self.merchants_file.exists():
-            self._atomic_write(self.merchants_file, {"merchants": {}})
+        defaults = {
+            self.ledger_file: {"transactions": []},
+            self.categories_file: {"nodes": {}, "root_ids": []},
+            self.budgets_file: {"budgets": []},
+            self.merchants_file: {"merchants": {}},
+            self.ignored_duplicates_file: [],
+        }
+        for path, initial in defaults.items():
+            if not path.exists():
+                self._atomic_write(path, initial)
 
     def _atomic_write(self, file_path: Path, data: Any):
         """
@@ -63,21 +72,16 @@ class Storage:
         Prevents corruption if write is interrupted.
         """
         with tempfile.NamedTemporaryFile(
-            mode='w',
-            dir=self.data_dir,
-            delete=False,
-            suffix='.tmp'
+            mode="w", dir=self.data_dir, delete=False, suffix=".tmp", encoding="utf-8"
         ) as tmp_file:
             json.dump(data, tmp_file, cls=DecimalEncoder, indent=2)
             tmp_path = tmp_file.name
-        
-        # Atomic rename
-        shutil.move(tmp_path, file_path)
+        os.replace(tmp_path, file_path)
 
-    def _read_file(self, file_path: Path) -> Dict:
+    def _read_file(self, file_path: Path) -> Any:
         """Read JSON file."""
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except FileNotFoundError:
             raise StorageError(f"File not found: {file_path}")
@@ -88,60 +92,61 @@ class Storage:
 
     def get_transactions(self) -> List[Dict]:
         """Get all transactions."""
-        data = self._read_file(self.ledger_file)
-        return data.get("transactions", [])
+        return self._read_file(self.ledger_file).get("transactions", [])
 
     def get_transaction(self, transaction_id: str) -> Optional[Dict]:
         """Get a specific transaction by ID."""
-        transactions = self.get_transactions()
-        return next((t for t in transactions if t.get("id") == transaction_id), None)
+        return next((t for t in self.get_transactions() if t.get("id") == transaction_id), None)
 
     def create_transaction(self, transaction_data: Dict) -> Dict:
         """Create a new transaction."""
-        transaction_data["id"] = str(uuid.uuid4())
-        transaction_data["created_at"] = datetime.utcnow().isoformat()
-        transaction_data["updated_at"] = datetime.utcnow().isoformat()
-        
+        return self.create_transactions([transaction_data])[0]
+
+    def create_transactions(self, transactions: Iterable[Dict]) -> List[Dict]:
+        """Create several transactions with a single write."""
         data = self._read_file(self.ledger_file)
-        data["transactions"].append(transaction_data)
+        created = []
+        for transaction_data in transactions:
+            now = _now()
+            transaction_data = {**transaction_data, "id": str(uuid.uuid4()), "created_at": now, "updated_at": now}
+            data["transactions"].append(transaction_data)
+            created.append(transaction_data)
         self._atomic_write(self.ledger_file, data)
-        
-        return transaction_data
+        return created
 
     def update_transaction(self, transaction_id: str, updates: Dict) -> Dict:
         """Update an existing transaction."""
+        return self.update_transactions({transaction_id: updates})[0]
+
+    def update_transactions(self, updates_by_id: Dict[str, Dict]) -> List[Dict]:
+        """Apply updates to several transactions with a single write."""
         data = self._read_file(self.ledger_file)
-        transactions = data.get("transactions", [])
-        
-        transaction = next((t for t in transactions if t.get("id") == transaction_id), None)
-        if not transaction:
-            raise StorageError(f"Transaction not found: {transaction_id}")
-        
-        updates["updated_at"] = datetime.utcnow().isoformat()
-        transaction.update(updates)
-        
-        self._atomic_write(self.ledger_file, data)
-        return transaction
+        by_id = {t.get("id"): t for t in data.get("transactions", [])}
+
+        missing = [tid for tid in updates_by_id if tid not in by_id]
+        if missing:
+            raise NotFoundError(f"Transaction not found: {', '.join(missing)}")
+
+        updated = []
+        for transaction_id, updates in updates_by_id.items():
+            transaction = by_id[transaction_id]
+            transaction.update(updates)
+            transaction["updated_at"] = _now()
+            updated.append(transaction)
+
+        if updated:
+            self._atomic_write(self.ledger_file, data)
+        return updated
 
     def delete_transaction(self, transaction_id: str):
         """Delete a transaction."""
         data = self._read_file(self.ledger_file)
-        original_count = len(data.get("transactions", []))
-        print(f"Before delete: {original_count} transactions")
-        
-        data["transactions"] = [
-            t for t in data.get("transactions", [])
-            if t.get("id") != transaction_id
-        ]
-        
-        new_count = len(data.get("transactions", []))
-        print(f"After delete: {new_count} transactions")
-        
-        if original_count == new_count:
-            print(f"WARNING: Transaction {transaction_id} not found!")
-        
+        transactions = data.get("transactions", [])
+        remaining = [t for t in transactions if t.get("id") != transaction_id]
+        if len(remaining) == len(transactions):
+            raise NotFoundError(f"Transaction not found: {transaction_id}")
+        data["transactions"] = remaining
         self._atomic_write(self.ledger_file, data)
-        print(f"Deleted transaction {transaction_id} and saved to disk")
 
     # ============ CATEGORIES ============
 
@@ -151,21 +156,20 @@ class Storage:
 
     def create_category(self, category_data: Dict) -> Dict:
         """Create a new category node."""
-        category_data["id"] = str(uuid.uuid4())
-        
+        category_data = {**category_data, "id": str(uuid.uuid4())}
+        category_data.setdefault("children", [])
+
         data = self._read_file(self.categories_file)
+        data.setdefault("root_ids", [])
         data["nodes"][category_data["id"]] = category_data
-        
-        # Add to parent's children if parent exists
+
         parent_id = category_data.get("parent_id")
         if parent_id and parent_id in data["nodes"]:
-            if "children" not in data["nodes"][parent_id]:
-                data["nodes"][parent_id]["children"] = []
-            data["nodes"][parent_id]["children"].append(category_data["id"])
+            data["nodes"][parent_id].setdefault("children", []).append(category_data["id"])
         else:
-            # Add as root if no parent
+            category_data["parent_id"] = None
             data["root_ids"].append(category_data["id"])
-        
+
         self._atomic_write(self.categories_file, data)
         return category_data
 
@@ -176,135 +180,134 @@ class Storage:
     def delete_category(self, category_id: str):
         """Delete a category and all its children recursively."""
         data = self._read_file(self.categories_file)
-        
-        if category_id not in data["nodes"]:
-            raise StorageError(f"Category not found: {category_id}")
-        
-        # Get all IDs to delete (category + all descendants)
-        ids_to_delete = self._get_category_descendants(category_id, data["nodes"])
-        ids_to_delete.append(category_id)
-        
-        print(f"Deleting category {category_id} and {len(ids_to_delete)-1} descendants")
-        
-        # Remove from parent's children list or root_ids
-        category = data["nodes"][category_id]
-        parent_id = category.get("parent_id")
-        
-        if parent_id and parent_id in data["nodes"]:
-            if "children" in data["nodes"][parent_id]:
-                data["nodes"][parent_id]["children"] = [
-                    c for c in data["nodes"][parent_id]["children"] if c != category_id
-                ]
-        elif category_id in data["root_ids"]:
+        nodes = data["nodes"]
+
+        if category_id not in nodes:
+            raise NotFoundError(f"Category not found: {category_id}")
+
+        ids_to_delete = [category_id] + self.get_category_descendants(category_id, nodes)
+
+        parent_id = nodes[category_id].get("parent_id")
+        if parent_id and parent_id in nodes:
+            nodes[parent_id]["children"] = [
+                c for c in nodes[parent_id].get("children", []) if c != category_id
+            ]
+        if category_id in data.get("root_ids", []):
             data["root_ids"].remove(category_id)
-        
-        # Delete all nodes
+
         for node_id in ids_to_delete:
-            if node_id in data["nodes"]:
-                del data["nodes"][node_id]
-        
+            nodes.pop(node_id, None)
+
         self._atomic_write(self.categories_file, data)
-    
-    def _get_category_descendants(self, category_id: str, nodes: Dict) -> List[str]:
+
+    def get_category_descendants(self, category_id: str, nodes: Dict) -> List[str]:
         """Recursively get all descendant IDs of a category."""
         descendants = []
-        if category_id in nodes:
-            for child_id in nodes[category_id].get("children", []):
-                descendants.append(child_id)
-                descendants.extend(self._get_category_descendants(child_id, nodes))
+        for child_id in nodes.get(category_id, {}).get("children", []):
+            descendants.append(child_id)
+            descendants.extend(self.get_category_descendants(child_id, nodes))
         return descendants
 
     # ============ BUDGETS ============
 
     def get_budgets(self) -> List[Dict]:
         """Get all budgets."""
-        data = self._read_file(self.budgets_file)
-        return data.get("budgets", [])
+        return self._read_file(self.budgets_file).get("budgets", [])
+
+    def get_budget(self, budget_id: str) -> Optional[Dict]:
+        """Get a specific budget by ID."""
+        return next((b for b in self.get_budgets() if b.get("id") == budget_id), None)
 
     def create_budget(self, budget_data: Dict) -> Dict:
         """Create a new budget."""
-        budget_data["id"] = str(uuid.uuid4())
-        budget_data["created_at"] = datetime.utcnow().isoformat()
-        budget_data["updated_at"] = datetime.utcnow().isoformat()
-        
+        now = _now()
+        budget_data = {**budget_data, "id": str(uuid.uuid4()), "created_at": now, "updated_at": now}
+
         data = self._read_file(self.budgets_file)
         data["budgets"].append(budget_data)
         self._atomic_write(self.budgets_file, data)
-        
         return budget_data
 
     def update_budget(self, budget_id: str, updates: Dict) -> Dict:
         """Update an existing budget."""
         data = self._read_file(self.budgets_file)
-        budgets = data.get("budgets", [])
-        
-        budget = next((b for b in budgets if b.get("id") == budget_id), None)
+        budget = next((b for b in data.get("budgets", []) if b.get("id") == budget_id), None)
         if not budget:
-            raise StorageError(f"Budget not found: {budget_id}")
-        
-        updates["updated_at"] = datetime.utcnow().isoformat()
+            raise NotFoundError(f"Budget not found: {budget_id}")
+
         budget.update(updates)
-        
+        budget["updated_at"] = _now()
         self._atomic_write(self.budgets_file, data)
         return budget
 
     def delete_budget(self, budget_id: str):
         """Delete a budget."""
         data = self._read_file(self.budgets_file)
-        data["budgets"] = [
-            b for b in data.get("budgets", [])
-            if b.get("id") != budget_id
-        ]
+        budgets = data.get("budgets", [])
+        remaining = [b for b in budgets if b.get("id") != budget_id]
+        if len(remaining) == len(budgets):
+            raise NotFoundError(f"Budget not found: {budget_id}")
+        data["budgets"] = remaining
         self._atomic_write(self.budgets_file, data)
 
     # ============ MERCHANTS ============
 
     def get_merchants(self) -> Dict[str, Dict]:
         """Get all merchants."""
-        data = self._read_file(self.merchants_file)
-        return data.get("merchants", {})
+        return self._read_file(self.merchants_file).get("merchants", {})
 
     def create_merchant(self, merchant_data: Dict) -> Dict:
         """Create a new merchant entry."""
-        merchant_data["id"] = str(uuid.uuid4())
-        merchant_data["created_at"] = datetime.utcnow().isoformat()
-        merchant_data["updated_at"] = datetime.utcnow().isoformat()
-        
+        now = _now()
+        merchant_data = {**merchant_data, "id": str(uuid.uuid4()), "created_at": now, "updated_at": now}
+
         data = self._read_file(self.merchants_file)
         data["merchants"][merchant_data["id"]] = merchant_data
         self._atomic_write(self.merchants_file, data)
-        
         return merchant_data
 
     def update_merchant(self, merchant_id: str, updates: Dict) -> Dict:
         """Update an existing merchant."""
         data = self._read_file(self.merchants_file)
         merchants = data.get("merchants", {})
-        
         if merchant_id not in merchants:
-            raise StorageError(f"Merchant not found: {merchant_id}")
-        
-        updates["updated_at"] = datetime.utcnow().isoformat()
+            raise NotFoundError(f"Merchant not found: {merchant_id}")
+
         merchants[merchant_id].update(updates)
-        
+        merchants[merchant_id]["updated_at"] = _now()
         self._atomic_write(self.merchants_file, data)
         return merchants[merchant_id]
 
     def delete_merchant(self, merchant_id: str):
         """Delete a merchant."""
         data = self._read_file(self.merchants_file)
-        merchants = data.get("merchants", {})
-        
-        if merchant_id in merchants:
-            del merchants[merchant_id]
-            self._atomic_write(self.merchants_file, data)
+        if data.get("merchants", {}).pop(merchant_id, None) is None:
+            raise NotFoundError(f"Merchant not found: {merchant_id}")
+        self._atomic_write(self.merchants_file, data)
 
     def get_merchant_by_name(self, name: str) -> Optional[Dict]:
-        """Find a merchant by name or alias."""
-        merchants = self.get_merchants()
-        for merchant in merchants.values():
-            if merchant["name"].lower() == name.lower():
-                return merchant
-            if any(alias.lower() == name.lower() for alias in merchant.get("aliases", [])):
+        """Find a merchant by name or alias (case-insensitive)."""
+        wanted = name.strip().lower()
+        for merchant in self.get_merchants().values():
+            names = [merchant.get("name", "")] + merchant.get("aliases", [])
+            if any(n.lower() == wanted for n in names):
                 return merchant
         return None
+
+    # ============ IGNORED DUPLICATES ============
+
+    def get_ignored_duplicates(self) -> List[List[str]]:
+        """Get transaction ID pairs the user has marked as 'not a duplicate'."""
+        return self._read_file(self.ignored_duplicates_file)
+
+    def add_ignored_duplicates(self, pairs: Iterable[Iterable[str]]) -> List[List[str]]:
+        """Record transaction ID pairs as 'not a duplicate'. Pairs are stored sorted."""
+        ignored = self.get_ignored_duplicates()
+        existing = {tuple(p) for p in ignored}
+        for pair in pairs:
+            key = tuple(sorted(pair))
+            if len(key) == 2 and key not in existing:
+                existing.add(key)
+                ignored.append(list(key))
+        self._atomic_write(self.ignored_duplicates_file, ignored)
+        return ignored
