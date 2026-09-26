@@ -1,26 +1,31 @@
 """
 PySide6 desktop frontend for the Budget App.
 """
+import logging
 import sys
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
-from decimal import Decimal
+from collections import defaultdict
+from datetime import datetime
+from io import BytesIO
+from typing import Any, Dict, List, Optional
 
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
-    QLabel, QPushButton, QLineEdit, QComboBox, QSpinBox, QDateEdit,
-    QDialog, QDialogButtonBox, QFormLayout, QMessageBox, QProgressBar,
-    QHeaderView, QMenu, QSplitter, QListWidget, QListWidgetItem, QGroupBox,
-    QGraphicsOpacityEffect, QSizePolicy
+import matplotlib
+matplotlib.use('Agg')  # Render charts off-screen; they're shown as images
+import matplotlib.colors as mcolors  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from PySide6.QtCore import QDate, QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal  # noqa: E402
+from PySide6.QtGui import QColor, QPixmap  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QGraphicsOpacityEffect, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
+    QProgressDialog, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTableWidget,
+    QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
-from PySide6.QtCore import Qt, QDate, QTimer, QThread, Signal, QObject, QPropertyAnimation, QEasingCurve, QSize, QRect, QPoint
-from PySide6.QtGui import QColor, QIcon
 
-from api_client import BudgetAppClient
+from api_client import BudgetAppClient  # noqa: E402
 
+logger = logging.getLogger("budgetapp.ui")
 
-# ============ COLOR PALETTE ============
 
 # ============ COLOR PALETTE ============
 COLOR_PALETTE = {
@@ -132,7 +137,7 @@ class CategoryTreeWidget(QTreeWidget):
         new_parent_item = dragged_item.parent()
         new_parent_id = new_parent_item.data(0, Qt.UserRole) if new_parent_item else None
         
-        print(f"Drop detected: Category {dragged_category_id} -> Parent {new_parent_id}")
+        logger.debug(f"Drop detected: Category {dragged_category_id} -> Parent {new_parent_id}")
         
         # Emit signal for parent window to handle API update
         self.category_moved.emit(dragged_category_id, new_parent_id)
@@ -449,11 +454,11 @@ class EditBudgetDialog(QDialog):
         self.category_combo = QComboBox()
         self.category_combo.addItems(["(Any)"] + self.categories)
         # Set current category
-        current_cat = self.budget.get("category_path", "(Any)")
+        current_cat = self.budget.get("category_path")
         if current_cat:
-            index = self.category_combo.findText(current_cat)
-            if index >= 0:
-                self.category_combo.setCurrentIndex(index)
+            if self.category_combo.findText(current_cat) < 0:
+                self.category_combo.addItem(current_cat)
+            self.category_combo.setCurrentIndex(self.category_combo.findText(current_cat))
         layout.addRow("Category:", self.category_combo)
 
         self.amount_input = QLineEdit()
@@ -472,7 +477,6 @@ class EditBudgetDialog(QDialog):
         # Parse start date from budget
         start_date_str = self.budget.get("start_date", "")
         if start_date_str:
-            from datetime import datetime
             try:
                 dt = datetime.fromisoformat(start_date_str.replace("Z", "+00:00"))
                 self.start_date.setDate(QDate(dt.year, dt.month, dt.day))
@@ -794,6 +798,7 @@ class BudgetAppMainWindow(QMainWindow):
         self.categories_list = []
         self.transactions = []
         self.budgets = []
+        self.budget_statuses = []
         self.unknowns = []  # Store unknowns separately
         
         # Filter state
@@ -948,7 +953,6 @@ class BudgetAppMainWindow(QMainWindow):
         dashboard_widget.setObjectName("dashboard_widget")
         
         # Wrap dashboard in scroll area
-        from PySide6.QtWidgets import QScrollArea
         dashboard_scroll = QScrollArea()
         dashboard_scroll.setWidget(dashboard_widget)
         dashboard_scroll.setWidgetResizable(True)
@@ -1149,7 +1153,6 @@ class BudgetAppMainWindow(QMainWindow):
         category_layout.setSpacing(2)
         
         # Container for checkbox grid
-        from PySide6.QtWidgets import QGridLayout, QScrollArea
         
         # Scrollable area for checkboxes
         scroll_area = QScrollArea()
@@ -1343,7 +1346,7 @@ class BudgetAppMainWindow(QMainWindow):
             
             self.categories_list = []
             
-            def add_node(parent_id, parent_widget=None):
+            def add_node(parent_id, parent_widget=None, parent_path=""):
                 if parent_id in nodes:
                     node = nodes[parent_id]
                     name = f"{node.get('icon', '')} {node.get('name', '')}".strip()
@@ -1357,17 +1360,17 @@ class BudgetAppMainWindow(QMainWindow):
                     else:
                         self.category_tree.addTopLevelItem(item)
                     
-                    # Store full node with all properties
+                    path = f"{parent_path}/{node.get('name', '')}" if parent_path else node.get('name', '')
                     self.categories_list.append({
                         'id': parent_id,
                         'name': node.get('name', ''),
                         'parent_id': node.get('parent_id'),
-                        'path': node.get('name', ''),
+                        'path': path,
                         'icon': node.get('icon', '')
                     })
                     
                     for child_id in node.get("children", []):
-                        add_node(child_id, item)
+                        add_node(child_id, item, path)
             
             for root_id in root_ids:
                 add_node(root_id)
@@ -1383,7 +1386,6 @@ class BudgetAppMainWindow(QMainWindow):
     def update_category_filter_dropdown(self):
         """Update the category filter checkboxes with current categories."""
         try:
-            from PySide6.QtWidgets import QCheckBox
             
             # Save current selections
             selected_names = [name for name, cb in self.category_checkboxes.items() if cb.isChecked()]
@@ -1418,7 +1420,7 @@ class BudgetAppMainWindow(QMainWindow):
                 self.category_checkboxes[cat_name] = checkbox
                     
         except Exception as e:
-            print(f"Failed to update category filter: {e}")
+            logger.exception(f"Failed to update category filter: {e}")
     
     def apply_filters(self):
         """Apply the current filter settings to all tabs."""
@@ -1470,41 +1472,33 @@ class BudgetAppMainWindow(QMainWindow):
         self.update_dashboard()
     
     def on_category_moved_signal(self, category_id: str, new_parent_id):
-        """Handle category drag-and-drop via custom signal."""
-        print(f"\n=== CATEGORY MOVED SIGNAL ===")
-        print(f"Category ID: {category_id}")
-        print(f"New Parent ID: {new_parent_id}")
-        
+        """Persist a drag-and-drop move of a category in the tree."""
         try:
-            # Update via API
-            result = self.client.update_category({
-                'id': category_id,
-                'parent_id': new_parent_id
-            })
-            print(f"API update successful: {result}")
-            
+            self.client.update_category(category_id, parent_id=new_parent_id)
             self.show_info("Category moved successfully")
-            # Reload to reflect changes
             QTimer.singleShot(100, self.load_categories)  # Small delay to let tree settle
         except Exception as e:
-            print(f"Error moving category: {e}")
-            import traceback
-            traceback.print_exc()
             self.show_error(f"Failed to move category: {e}")
             self.load_categories()  # Reload to revert
     
-    def on_category_moved(self, parent, start, end, destination, row):
-        """Legacy handler for rowsMoved signal (kept for compatibility)."""
-        print(f"\n=== DRAG DROP EVENT FIRED (rowsMoved) ===")
-        print(f"parent: {parent}, start: {start}, end: {end}, destination: {destination}, row: {row}")
+    def category_paths(self) -> List[str]:
+        """Full paths of all categories, e.g. 'Food & Dining/Groceries'."""
+        return [cat['path'] for cat in self.categories_list]
+    
+    def matches_category_filter(self, category_path: Optional[str]) -> bool:
+        """True if a category path falls under one of the checked category filters."""
+        if not category_path:
+            return False
+        selected = {cat['name'] for cat in self.categories_list if cat['id'] in self.active_category_filters}
+        return any(f"/{name}/" in f"/{category_path}/" for name in selected)
 
     def load_transactions(self):
         """Load and display transactions."""
         try:
-            print("Loading transactions from API...")
+            logger.debug("Loading transactions from API...")
             data = self.client.list_transactions(limit=10000)
             all_transactions = data.get("transactions", [])
-            print(f"Loaded {len(all_transactions)} transactions")
+            logger.debug(f"Loaded {len(all_transactions)} transactions")
             
             # Apply filters
             filtered_transactions = []
@@ -1517,35 +1511,13 @@ class BudgetAppMainWindow(QMainWindow):
                     continue
                 
                 # Category filter - check if transaction category is in selected categories
-                if self.active_category_filters:
-                    # Get selected category names from filter
-                    selected_names = []
-                    for i in range(self.category_filter_list.count()):
-                        item = self.category_filter_list.item(i)
-                        if item.isSelected():
-                            selected_names.append(item.text())
-                    
-                    if selected_names:
-                        # Check if transaction's category_path starts with any selected category
-                        trans_cat = trans.get("category_path", "")
-                        if not trans_cat:
-                            continue
-                        
-                        # Check if any selected category matches
-                        category_matches = False
-                        for selected_name in selected_names:
-                            # Match if category_path equals or starts with selected category
-                            if trans_cat == selected_name or trans_cat.startswith(selected_name + "/"):
-                                category_matches = True
-                                break
-                        
-                        if not category_matches:
-                            continue
+                if self.active_category_filters and not self.matches_category_filter(trans.get("category_path")):
+                    continue
                 
                 filtered_transactions.append(trans)
             
             self.transactions = filtered_transactions
-            print(f"After filtering: {len(self.transactions)} transactions")
+            logger.debug(f"After filtering: {len(self.transactions)} transactions")
             
             # Clear table completely
             self.transactions_table.clearContents()
@@ -1624,7 +1596,7 @@ class BudgetAppMainWindow(QMainWindow):
             # Re-enable sorting after all rows are added
             self.transactions_table.setSortingEnabled(True)
         except Exception as e:
-            print(f"ERROR loading transactions: {e}")
+            logger.exception(f"ERROR loading transactions: {e}")
             self.show_error(f"Failed to load transactions: {e}")
     
     def _make_delete_handler(self, transaction_id):
@@ -1643,31 +1615,18 @@ class BudgetAppMainWindow(QMainWindow):
         """Load and display budgets."""
         try:
             # Get actual budgets and their statuses
+            # With a date range the backend pro-rates each budget to it;
+            # otherwise it reports the current month/quarter/year.
             all_budgets = self.client.list_budgets()
-            statuses = self.client.get_budget_status()
+            statuses = self.client.get_budget_status(self.active_date_from, self.active_date_to)
             
-            # Store both for use in charts and display
             self.budgets = all_budgets.get("budgets", [])
             self.budget_statuses = statuses.get("statuses", [])
             
-            # Calculate scaling factor based on date range
-            scale_factor = self._calculate_budget_scale_factor()
-            
-            # Apply category filter
-            filtered_statuses = []
-            for status in self.budget_statuses:
-                if self.active_category_filters:
-                    # Get the budget to check its category
-                    budget = next((b for b in self.budgets if b.get("id") == status.get("budget_id")), None)
-                    if budget:
-                        budget_cat_id = budget.get("category_id")
-                        if budget_cat_id not in self.active_category_filters:
-                            continue
-                
-                # Scale the budget amounts
-                scaled_status = status.copy()
-                scaled_status["budget_amount"] = status.get("budget_amount", 0) * scale_factor
-                filtered_statuses.append(scaled_status)
+            filtered_statuses = [
+                status for status in self.budget_statuses
+                if not self.active_category_filters or self.matches_category_filter(status.get("category_path"))
+            ]
             
             self.budgets_table.setRowCount(0)
             
@@ -1677,14 +1636,11 @@ class BudgetAppMainWindow(QMainWindow):
             for i, status in enumerate(filtered_statuses):
                 self.budgets_table.insertRow(i)
                 
-                category = status.get("category_path", "All")
+                category = status.get("category_path") or "All"
                 budget_amount = f"R{status.get('budget_amount', 0):.2f}"
                 spent = f"R{status.get('spent_amount', 0):.2f}"
                 
-                # Recalculate percentage with scaled budget
-                scaled_budget = status.get('budget_amount', 0)
-                spent_val = status.get('spent_amount', 0)
-                percentage = (spent_val / scaled_budget * 100) if scaled_budget > 0 else 0
+                percentage = status.get('percentage', 0)
                 
                 status_text = "OVER" if percentage >= 100 else ("WARNING" if percentage >= 75 else "OK")
                 
@@ -1733,32 +1689,6 @@ class BudgetAppMainWindow(QMainWindow):
             
         except Exception as e:
             self.show_error(f"Failed to load budgets: {e}")
-    
-    def _calculate_budget_scale_factor(self):
-        """Calculate budget scaling factor based on active date range."""
-        if not self.active_date_from or not self.active_date_to:
-            return 1.0  # No scaling if no date range selected
-        
-        from datetime import datetime
-        try:
-            date_from = datetime.strptime(self.active_date_from, "%Y-%m-%d")
-            date_to = datetime.strptime(self.active_date_to, "%Y-%m-%d")
-            
-            # Calculate days in selected range
-            days_selected = (date_to - date_from).days + 1
-            
-            # Assume budgets are monthly (30 days)
-            days_in_period = 30
-            
-            # Scale factor
-            scale_factor = days_selected / days_in_period
-            
-            print(f"Budget scaling: {days_selected} days selected / {days_in_period} days = {scale_factor:.2f}x")
-            return scale_factor
-            
-        except Exception as e:
-            print(f"Error calculating budget scale: {e}")
-            return 1.0
     
     def _make_delete_budget_handler(self, budget_id):
         """Create delete budget handler with proper closure."""
@@ -1826,161 +1756,53 @@ class BudgetAppMainWindow(QMainWindow):
             self.show_error(f"Failed to load unknowns: {e}")
     
     def load_duplicates(self):
-        """Load possible duplicate transactions."""
+        """Load possible duplicate transactions (same date and amount)."""
         try:
             self.duplicates_table.clearContents()
+            self.duplicates_table.setRowCount(0)
             
             # Disable sorting while populating to prevent button disappearance
             self.duplicates_table.setSortingEnabled(False)
-            QApplication.processEvents()
             
-            # Load ignored duplicates
-            import json
-            import os
-            ignored_file = os.path.join(os.path.dirname(__file__), "..", "backend", "data", "ignored_duplicates.json")
-            ignored_pairs = set()
-            try:
-                if os.path.exists(ignored_file):
-                    with open(ignored_file, 'r') as f:
-                        ignored_list = json.load(f)
-                        # Convert list of pairs to set of tuples for fast lookup
-                        ignored_pairs = {(pair[0], pair[1]) for pair in ignored_list}
-            except Exception as e:
-                print(f"Could not load ignored duplicates: {e}")
-            
-            # Get all transactions
-            data = self.client.list_transactions(limit=1000)
-            transactions = data.get("transactions", [])
-            if not transactions:
-                self.duplicates_table.setRowCount(0)
-                return
-            
-            # Group by date + amount to find duplicates
-            from collections import defaultdict
-            groups = defaultdict(list)
-            for trans in transactions:
-                key = (trans.get("date"), trans.get("amount"))
-                groups[key].append(trans)
-            
-            # Filter to only groups with 2+ items
-            duplicate_groups = {k: v for k, v in groups.items() if len(v) > 1}
-            
-            # Flatten groups for display, excluding ignored pairs
-            rows = []
-            for (date, amount), trans_list in duplicate_groups.items():
-                # Filter out ignored transactions from this group
-                filtered_trans_list = []
-                for trans in trans_list:
-                    trans_id = trans.get("id")
-                    # Check if this transaction is ignored with any other in the group
-                    is_ignored = any(
-                        (trans_id, other.get("id")) in ignored_pairs or 
-                        (other.get("id"), trans_id) in ignored_pairs
-                        for other in trans_list if other.get("id") != trans_id
-                    )
-                    if not is_ignored:
-                        filtered_trans_list.append(trans)
-                
-                # Only show group if still has 2+ non-ignored items
-                if len(filtered_trans_list) >= 2:
-                    for trans in filtered_trans_list:
-                        rows.append({
-                            "transaction": trans,
-                            "match_count": len(filtered_trans_list),
-                            "group_transactions": filtered_trans_list
-                        })
-            
-            if not rows:
-                self.duplicates_table.setRowCount(0)
-                return
-            
+            groups = self.client.get_duplicates().get("groups", [])
+            rows = [(trans, group["transactions"]) for group in groups for trans in group["transactions"]]
             self.duplicates_table.setRowCount(len(rows))
             
-            for i, row in enumerate(rows):
-                trans = row["transaction"]
-                match_count = row["match_count"]
+            for i, (trans, group_transactions) in enumerate(rows):
+                cells = [
+                    trans.get("date", "")[:10],
+                    trans.get("description", ""),
+                    f"R{trans.get('amount', 0):.2f}",
+                    f"{len(group_transactions)} matches",
+                ]
+                for col, text in enumerate(cells):
+                    item = QTableWidgetItem(text)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    self.duplicates_table.setItem(i, col, item)
                 
-                # Date
-                date_item = QTableWidgetItem(trans.get("date", ""))
-                date_item.setFlags(date_item.flags() & ~Qt.ItemIsEditable)
-                self.duplicates_table.setItem(i, 0, date_item)
-                
-                # Description
-                desc_item = QTableWidgetItem(trans.get("description", ""))
-                desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)
-                self.duplicates_table.setItem(i, 1, desc_item)
-                
-                # Amount
-                amount_item = QTableWidgetItem(f"R{trans.get('amount', 0):.2f}")
-                amount_item.setFlags(amount_item.flags() & ~Qt.ItemIsEditable)
-                self.duplicates_table.setItem(i, 2, amount_item)
-                
-                # Match count
-                match_item = QTableWidgetItem(f"{match_count} matches")
-                match_item.setFlags(match_item.flags() & ~Qt.ItemIsEditable)
-                self.duplicates_table.setItem(i, 3, match_item)
-                
-                # Keep button - store group info in button
                 keep_btn = QPushButton("✅ Keep")
                 keep_btn.setMinimumWidth(80)
-                keep_btn.setStyleSheet("""
-                    QPushButton {
-                        padding: 4px 10px;
-                        font-size: 13px;
-                    }
-                """)
-                keep_btn.clicked.connect(
-                    self._make_keep_duplicate_handler(trans.get("id"), row["group_transactions"])
-                )
+                keep_btn.setStyleSheet("QPushButton { padding: 4px 10px; font-size: 13px; }")
+                keep_btn.clicked.connect(self._make_keep_duplicate_handler(trans.get("id"), group_transactions))
                 self.duplicates_table.setCellWidget(i, 4, keep_btn)
                 
-                # Delete button
                 delete_btn = QPushButton("🗑️ Delete")
                 delete_btn.setMinimumWidth(80)
-                delete_btn.setStyleSheet("""
-                    QPushButton {
-                        padding: 4px 10px;
-                        font-size: 13px;
-                    }
-                """)
-                delete_btn.clicked.connect(
-                    self._make_delete_duplicate_handler(trans.get("id"))
-                )
+                delete_btn.setStyleSheet("QPushButton { padding: 4px 10px; font-size: 13px; }")
+                delete_btn.clicked.connect(self._make_delete_duplicate_handler(trans.get("id")))
                 self.duplicates_table.setCellWidget(i, 5, delete_btn)
             
-            # Re-enable sorting after all rows are added
             self.duplicates_table.setSortingEnabled(True)
                 
         except Exception as e:
             self.show_error(f"Failed to load duplicates: {e}")
     
     def _make_keep_duplicate_handler(self, transaction_id, group_transactions):
-        """Create handler to mark duplicate as kept (save as not duplicate)."""
+        """Create handler that marks a transaction as 'not a duplicate' of the rest of its group."""
         def handler():
-            import json
-            import os
+            pairs = [[transaction_id, other["id"]] for other in group_transactions if other["id"] != transaction_id]
             try:
-                ignored_file = os.path.join(os.path.dirname(__file__), "..", "backend", "data", "ignored_duplicates.json")
-                
-                # Load existing ignored pairs
-                ignored_list = []
-                if os.path.exists(ignored_file):
-                    with open(ignored_file, 'r') as f:
-                        ignored_list = json.load(f)
-                
-                # Add all pairs between this transaction and others in group
-                for other_trans in group_transactions:
-                    other_id = other_trans.get("id")
-                    if other_id != transaction_id:
-                        # Store as sorted pair to avoid duplicates
-                        pair = tuple(sorted([transaction_id, other_id]))
-                        if list(pair) not in ignored_list:
-                            ignored_list.append(list(pair))
-                
-                # Save back
-                with open(ignored_file, 'w') as f:
-                    json.dump(ignored_list, f, indent=2)
-                
+                self.client.ignore_duplicates(pairs)
                 self.load_duplicates()
             except Exception as e:
                 self.show_error(f"Failed to save ignored duplicate: {e}")
@@ -2041,7 +1863,7 @@ class BudgetAppMainWindow(QMainWindow):
             self.merchants_table.setSortingEnabled(True)
                 
         except Exception as e:
-            print(f"Failed to load merchants: {e}")
+            logger.exception(f"Failed to load merchants: {e}")
             self.show_error(f"Failed to load merchants: {e}")
     
     def _make_delete_merchant_handler(self, merchant_id):
@@ -2083,7 +1905,7 @@ class BudgetAppMainWindow(QMainWindow):
 
     def new_transaction(self):
         """Create a new transaction with AI assistance."""
-        category_names = [cat.get('name', cat) if isinstance(cat, dict) else cat for cat in self.categories_list]
+        category_names = self.category_paths()
         dialog = CreateTransactionDialog(self, category_names)
         if dialog.exec() == QDialog.Accepted:
             data = dialog.get_data()
@@ -2098,8 +1920,6 @@ class BudgetAppMainWindow(QMainWindow):
                 return
             
             # Show loading
-            from PySide6.QtWidgets import QProgressDialog
-            from PySide6.QtCore import Qt
             progress = QProgressDialog("AI is processing your transaction...", None, 0, 0, self)
             progress.setWindowModality(Qt.WindowModal)
             progress.setAutoClose(True)
@@ -2130,27 +1950,25 @@ class BudgetAppMainWindow(QMainWindow):
 
     def delete_transaction(self, transaction_id: str):
         """Delete a transaction."""
-        print(f"Delete button clicked for transaction: {transaction_id}")
+        logger.debug(f"Delete button clicked for transaction: {transaction_id}")
         if QMessageBox.question(self, "Confirm", "Delete this transaction?") == QMessageBox.Yes:
             try:
-                print(f"Calling API to delete transaction: {transaction_id}")
+                logger.debug(f"Calling API to delete transaction: {transaction_id}")
                 result = self.client.delete_transaction(transaction_id)
-                print(f"Delete result: {result}")
+                logger.debug(f"Delete result: {result}")
                 self.show_info("Transaction deleted successfully")
-                print("Reloading transactions...")
+                logger.debug("Reloading transactions...")
                 self.load_transactions()
                 self.load_unknowns()
                 self.update_dashboard()
-                print("Reload complete")
+                logger.debug("Reload complete")
             except Exception as e:
-                print(f"ERROR deleting transaction: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception(f"ERROR deleting transaction: {e}")
                 self.show_error(f"Failed to delete transaction: {e}")
 
     def edit_transaction(self, transaction_id: str):
         """Edit a transaction with full details."""
-        print(f"Edit button clicked for transaction: {transaction_id}")
+        logger.debug(f"Edit button clicked for transaction: {transaction_id}")
         
         # Find the transaction
         trans = next((t for t in self.transactions if t.get("id") == transaction_id), None)
@@ -2159,16 +1977,16 @@ class BudgetAppMainWindow(QMainWindow):
             return
         
         # Open edit dialog with existing data
-        category_names = [cat.get('name', cat) if isinstance(cat, dict) else cat for cat in self.categories_list]
+        category_names = self.category_paths()
         dialog = EditTransactionDialog(self, transaction=trans, categories=category_names)
         if dialog.exec():
             try:
                 updated_data = dialog.get_data()
-                print(f"Updating transaction {transaction_id} with: {updated_data}")
+                logger.debug(f"Updating transaction {transaction_id} with: {updated_data}")
                 
                 # Call API to update (use **kwargs)
                 result = self.client.update_transaction(transaction_id, **updated_data)
-                print(f"Update result: {result}")
+                logger.debug(f"Update result: {result}")
                 
                 self.show_info("Transaction updated successfully")
                 
@@ -2181,14 +1999,11 @@ class BudgetAppMainWindow(QMainWindow):
                 self.load_unknowns()
                 self.update_dashboard()
             except Exception as e:
-                print(f"ERROR updating transaction: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception(f"ERROR updating transaction: {e}")
                 self.show_error(f"Failed to update transaction: {e}")
 
     def categorize_transaction(self, transaction_id: str):
         """Categorize an unknown transaction."""
-        from PySide6.QtWidgets import QInputDialog
         
         # Find the transaction in unknowns list (not filtered transactions)
         trans = next((t for t in self.unknowns if t.get("id") == transaction_id), None)
@@ -2204,8 +2019,7 @@ class BudgetAppMainWindow(QMainWindow):
             self.show_error("Transaction not found")
             return
         
-        # Extract category names from dict list
-        category_names = [cat.get('name', '') for cat in self.categories_list if isinstance(cat, dict)]
+        category_names = self.category_paths()
         
         # Show simple category picker
         category, ok = QInputDialog.getItem(
@@ -2241,11 +2055,11 @@ class BudgetAppMainWindow(QMainWindow):
                             self.client.update_transaction(other_id, category_path=category)
                             matching_count += 1
                         except Exception as e:
-                            print(f"Failed to auto-categorize {other_id}: {e}")
+                            logger.exception(f"Failed to auto-categorize {other_id}: {e}")
                 
                 # Show success message with count
                 if matching_count > 0:
-                    self.show_info(f"Transaction categorized as '{category}'\\n\\nAlso categorized {matching_count} other matching transaction(s)")
+                    self.show_info(f"Transaction categorized as '{category}'\n\nAlso categorized {matching_count} other matching transaction(s)")
                 else:
                     self.show_info(f"Transaction categorized as '{category}'")
                 
@@ -2261,42 +2075,37 @@ class BudgetAppMainWindow(QMainWindow):
 
     def new_budget(self):
         """Create a new budget."""
-        # Extract category names from dict list
-        category_names = [cat.get('name', '') for cat in self.categories_list if isinstance(cat, dict)]
+        category_names = self.category_paths()
         dialog = CreateBudgetDialog(self, category_names)
         if dialog.exec() == QDialog.Accepted:
             data = dialog.get_data()
-            print(f"Creating budget with data: {data}")
+            logger.debug(f"Creating budget with data: {data}")
             try:
                 result = self.client.create_budget(**data)
-                print(f"Budget created: {result}")
+                logger.debug(f"Budget created: {result}")
                 self.show_info("Budget created successfully")
                 self.load_budgets()
                 self.update_dashboard()
             except Exception as e:
-                print(f"ERROR creating budget: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception(f"ERROR creating budget: {e}")
                 self.show_error(f"Failed to create budget: {e}")
 
     def delete_budget(self, budget_id: str):
         """Delete a budget."""
-        print(f"Delete budget called with ID: {budget_id}")
+        logger.debug(f"Delete budget called with ID: {budget_id}")
         if not budget_id:
             self.show_error("Cannot delete budget: No budget ID")
             return
         
         if QMessageBox.question(self, "Confirm", "Delete this budget?") == QMessageBox.Yes:
             try:
-                print(f"Calling API to delete budget: {budget_id}")
+                logger.debug(f"Calling API to delete budget: {budget_id}")
                 self.client.delete_budget(budget_id)
                 self.show_info("Budget deleted successfully")
                 self.load_budgets()
                 self.update_dashboard()
             except Exception as e:
-                print(f"ERROR deleting budget: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception(f"ERROR deleting budget: {e}")
                 self.show_error(f"Failed to delete budget: {e}")
     
     def edit_budget(self, budget_id: str):
@@ -2307,8 +2116,7 @@ class BudgetAppMainWindow(QMainWindow):
             self.show_error("Budget not found")
             return
         
-        # Extract category names
-        category_names = [cat.get('name', '') for cat in self.categories_list if isinstance(cat, dict)]
+        category_names = self.category_paths()
         
         # Create edit dialog with current values
         dialog = EditBudgetDialog(self, category_names, budget)
@@ -2376,8 +2184,6 @@ class BudgetAppMainWindow(QMainWindow):
 
     def import_csv(self):
         """Import transactions from CSV."""
-        from PySide6.QtWidgets import QFileDialog, QProgressDialog
-        from PySide6.QtCore import Qt
         
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -2386,180 +2192,45 @@ class BudgetAppMainWindow(QMainWindow):
             "CSV Files (*.csv)"
         )
         
-        if file_path:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    csv_content = f.read()
-                
-                # Count transactions for progress estimation
-                line_count = len([l for l in csv_content.split('\n') if l.strip()])
-                
-                # Show progress dialog
-                progress = QProgressDialog("Importing and categorizing transactions...\nThis may take a few minutes for large files.", None, 0, 0, self)
-                progress.setWindowModality(Qt.WindowModal)
-                progress.setAutoClose(True)
-                progress.show()
-                
-                result = self.client.import_bank_csv(csv_content, bank_format="generic")
-                
-                progress.close()
-                
-                self.show_info(f"Imported {result.get('imported', 0)} transactions")
-                self.load_transactions()
-                self.load_unknowns()
-            except Exception as e:
-                if 'progress' in locals():
-                    progress.close()
-                self.show_error(f"Failed to import/read CSV: {e}")
+        if not file_path:
+            return
+        try:
+            # Bank exports are often not UTF-8; don't fail on the odd stray byte.
+            with open(file_path, 'r', encoding='utf-8-sig', errors='replace') as f:
+                csv_content = f.read()
+        except OSError as e:
+            self.show_error(f"Failed to read CSV: {e}")
+            return
+
+        progress = QProgressDialog("Importing and categorizing transactions...\nThis may take a few minutes for large files.", None, 0, 0, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        try:
+            result = self.client.import_bank_csv(csv_content, bank_format="generic")
+        except Exception as e:
+            progress.close()
+            self.show_error(f"Failed to import CSV: {e}")
+            return
+        progress.close()
+
+        lines = [
+            f"Imported: {result.get('imported', 0)}",
+            f"Already in ledger (skipped): {result.get('duplicates', 0)}",
+            f"Unreadable rows (skipped): {result.get('skipped', 0)}",
+            f"Categorized from learned merchants: {result.get('learned_categorised', 0)}",
+            f"Categorized by AI: {result.get('ai_categorised', 0)}",
+        ]
+        if result.get('ai_error'):
+            lines.append(f"\nAI categorization was skipped: {result['ai_error']}")
+        message = "\n".join(lines)
+        self.import_status.setText(message)
+        self.show_info(message)
+        self.load_transactions()
+        self.load_unknowns()
+        self.load_duplicates()
+        self.update_dashboard()
 
     # ============ UTILITY METHODS ============
-
-    def show_error(self, message: str):
-        """Show error message."""
-        QMessageBox.critical(self, "Error", message)
-        """Import transactions from image or PDF."""
-        from PySide6.QtWidgets import QFileDialog, QProgressDialog
-        from PySide6.QtCore import Qt
-        
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Image or PDF",
-            "",
-            "Images and PDFs (*.png *.jpg *.jpeg *.pdf *.bmp *.tiff)"
-        )
-        
-        if file_path:
-            # Show progress dialog
-            progress = QProgressDialog("🤖 AI is analyzing your image...\nThis may take 10-30 seconds...", None, 0, 0, self)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setAutoClose(False)
-            progress.show()
-            
-            try:
-                # Process image (this may take a while)
-                result = self.client.import_image(file_path)
-                
-                progress.close()
-                
-                # Build result message
-                doc_type = result.get("document_type", "unknown")
-                confidence = result.get("confidence", 0)
-                imported = result.get("imported", 0)
-                duplicates = result.get("duplicates_found", 0)
-                warnings = result.get("warnings", [])
-                
-                message = f"Document Type: {doc_type.replace('_', ' ').title()}\n"
-                message += f"Confidence: {confidence:.0%}\n\n"
-                message += f"Imported: {imported} transaction(s)\n"
-                
-                if duplicates > 0:
-                    message += f"Duplicates Skipped: {duplicates}\n"
-                
-                if warnings:
-                    message += "\nWarnings:\n"
-                    for warning in warnings:
-                        message += f"• {warning}\n"
-                
-                self.import_status.setText(message)
-                
-                if imported > 0:
-                    self.show_info(f"Successfully imported {imported} transaction(s) from {doc_type.replace('_', ' ')}")
-                    self.load_transactions()
-                    self.load_unknowns()
-                elif duplicates > 0:
-                    self.show_info(f"No new transactions imported - {duplicates} duplicates found")
-                else:
-                    self.show_info("Document processed but no transactions imported")
-                
-            except Exception as e:
-                progress.close()
-                self.import_status.setText(f"Error: {str(e)}")
-                self.show_error(f"Failed to process image: {e}")
-
-    def import_text(self):
-        """Import transactions from pasted text using AI."""
-        from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QPushButton, QDialog
-        
-        # Create dialog with text area
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Paste Transaction Text")
-        dialog.setGeometry(100, 100, 600, 400)
-        
-        layout = QVBoxLayout()
-        
-        label = QLabel("Paste text from your bank statement or receipt:")
-        layout.addWidget(label)
-        
-        text_edit = QTextEdit()
-        text_edit.setPlaceholderText(
-            "Example:\n"
-            "12/14/2025  McDonald's  $12.50\n"
-            "12/14/2025  Petrol Station  R45.00\n"
-            "12/15/2025  Grocery Store  $87.32"
-        )
-        layout.addWidget(text_edit)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        
-        dialog.setLayout(layout)
-        
-        if dialog.exec() == QDialog.Accepted:
-            text = text_edit.toPlainText().strip()
-            
-            if not text:
-                self.show_error("Please paste some text")
-                return
-            
-            # Show loading animation
-            from PySide6.QtWidgets import QProgressDialog
-            from PySide6.QtCore import Qt
-            progress = QProgressDialog("🤖 AI is parsing your text...\nThis may take a few seconds...", None, 0, 0, self)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setAutoClose(True)
-            progress.show()
-            
-            try:
-                # Send to AI for parsing
-                result = self.client.import_text(text)
-                progress.close()
-                
-                # Build result message
-                doc_type = result.get("document_type", "unknown")
-                confidence = result.get("confidence", 0)
-                imported = result.get("imported", 0)
-                duplicates = result.get("duplicates_found", 0)
-                warnings = result.get("warnings", [])
-                
-                message = f"AI detected: {doc_type.replace('_', ' ').title()}\n"
-                message += f"Confidence: {confidence:.0%}\n\n"
-                message += f"Imported: {imported} transaction(s)\n"
-                
-                if duplicates > 0:
-                    message += f"Duplicates Skipped: {duplicates}\n"
-                
-                if warnings:
-                    message += "\nWarnings:\n"
-                    for warning in warnings:
-                        message += f"• {warning}\n"
-                
-                self.import_status.setText(message)
-                
-                if imported > 0:
-                    self.show_info(f"✅ Imported {imported} transaction(s)!\n\nTransactions have been automatically categorized by AI.\nCheck 'Unknowns' tab if any couldn't be categorized.")
-                    self.load_transactions()
-                    self.load_unknowns()
-                elif duplicates > 0:
-                    self.show_info(f"No new transactions - {duplicates} duplicates found")
-                else:
-                    self.show_info("No transactions found. Try adjusting the text format.")
-                
-            except Exception as e:
-                progress.close()
-                self.import_status.setText(f"Error: {str(e)}")
-                self.show_error(f"Failed to parse text: {e}")
 
     def show_error(self, message: str):
         """Show error message."""
@@ -2574,108 +2245,9 @@ class BudgetAppMainWindow(QMainWindow):
         self.client.close()
         event.accept()
     
-    def pie_chart_clicked(self, event):
-        """Handle pie chart click to drill down into subcategories."""
-        if not hasattr(self, '_pie_slice_data') or not self._pie_slice_data:
-            print("No pie slice data available")
-            return
-            
-        # Get click position
-        pos = event.position().toPoint()
-        x = pos.x()
-        y = pos.y()
-        
-        # Get label size
-        label_width = self.category_chart_label.width()
-        label_height = self.category_chart_label.height()
-        
-        # Calculate center
-        center_x = label_width / 2
-        center_y = label_height / 2
-        
-        # Calculate relative position from center (-1 to 1)
-        rel_x = (x - center_x) / (min(label_width, label_height) / 2.2)
-        rel_y = (center_y - y) / (min(label_width, label_height) / 2.2)  # Flip Y
-        
-        # Calculate distance from center
-        import math
-        distance = math.sqrt(rel_x**2 + rel_y**2)
-        
-        print(f"Click: x={x}, y={y}, rel_x={rel_x:.2f}, rel_y={rel_y:.2f}, distance={distance:.2f}")
-        
-        # Check if click is within pie radius (0.05 to 1.2 for very forgiving detection)
-        if distance < 0.05 or distance > 1.2:
-            print("Click outside pie chart area")
-            return
-        
-        # Calculate angle (0-360, starting from right, counter-clockwise)
-        angle = math.atan2(rel_y, rel_x) * 180 / math.pi
-        if angle < 0:
-            angle += 360
-        
-        # Matplotlib pies start at 90\u00b0 (top) and go counter-clockwise
-        # Adjust angle to match matplotlib's coordinate system
-        adjusted_angle = (90 - angle) % 360
-        
-        print(f"Angle: {angle:.1f}\u00b0, Adjusted: {adjusted_angle:.1f}\u00b0")
-        
-        # Calculate which slice based on cumulative angles
-        total = sum(size for _, size in self._pie_slice_data)
-        cumulative = 0
-        
-        for i, (category, size) in enumerate(self._pie_slice_data):
-            percentage = (size / total) * 360
-            print(f"Slice {i}: {category}, range={cumulative:.1f}° to {cumulative + percentage:.1f}°")
-            # Add 15 degree tolerance for much easier clicking
-            if (cumulative - 15) <= adjusted_angle < (cumulative + percentage + 15):
-                print(f"✓ Clicked on: {category}")
-                self.drill_down_category(category)
-                return
-            cumulative += percentage
-        
-        print("No slice matched")
-    
-    def drill_down_category(self, category: str):
-        """Drill down into a category to show subcategories."""
-        # Check if this category has subcategories
-        has_children = any(
-            cat.get('parent_id') and 
-            any(c.get('id') == cat.get('parent_id') and c.get('name') == category 
-                for c in self.categories_list)
-            for cat in self.categories_list
-        )
-        
-        # Also check for path-based subcategories
-        has_path_children = any(
-            (cat.get('category_path') or '').startswith(category + '/')
-            for cat in self.transactions
-        )
-        
-        if has_children or has_path_children or '/' not in category:
-            print(f"Drilling down into: {category}")
-            self.chart_drill_down_stack.append(category)
-            self.update_dashboard()
-        else:
-            print(f"No subcategories found for: {category}")
-    
-    def pie_chart_back(self):
-        """Go back to previous drill-down level."""
-        if self.chart_drill_down_stack:
-            self.chart_drill_down_stack.pop()
-            if not self.chart_drill_down_stack:
-                self.chart_back_btn.setVisible(False)
-            self.update_dashboard()
-
     def update_dashboard(self):
         """Update dashboard charts and statistics."""
         try:
-            import matplotlib
-            matplotlib.use('Agg')  # Use non-interactive backend
-            import matplotlib.pyplot as plt
-            from io import BytesIO
-            from PySide6.QtGui import QPixmap
-            from datetime import datetime, timedelta
-            from collections import defaultdict
             
             # Calculate statistics
             total_income = sum(t.get('amount', 0) for t in self.transactions if t.get('transaction_type') == 'income')
@@ -2778,7 +2350,6 @@ class BudgetAppMainWindow(QMainWindow):
                 sizes = [amount for _, amount in sorted_cats]
                 
                 # Store slice data for click detection (category, size)
-                self._pie_slice_data = sorted_cats
                 
                 fig, ax = plt.subplots(figsize=(7, 5.5), facecolor='white')
                 fig.patch.set_facecolor('white')
@@ -2873,34 +2444,11 @@ class BudgetAppMainWindow(QMainWindow):
                 self.spending_time_chart.setText("<center><br><br><b>No time data yet</b><br>Add transactions to see trends</center>")
             
             # Chart 3: Budget Progress (Bar Chart)
-            if self.budgets:
-                budget_names = []
-                budget_limits = []
-                budget_spent = []
-                
-                print(f"\n=== BUDGET CHART DEBUG ===")
-                print(f"Number of budgets: {len(self.budgets)}")
-                
-                for budget in self.budgets[:6]:  # Top 6 budgets
-                    cat = budget.get('category_path', 'All')
-                    budget_names.append(cat if cat else 'All')
-                    amount = budget.get('amount', 0)
-                    budget_limits.append(amount)
-                    
-                    print(f"Budget: {cat}, Amount: {amount}")
-                    
-                    # Calculate spent
-                    filtered = [t for t in self.transactions 
-                               if t.get('transaction_type') == 'expense']
-                    if cat and cat != 'All':
-                        filtered = [t for t in filtered 
-                                   if (t.get('category_path') or '').startswith(cat)]
-                    spent = sum(t.get('amount', 0) for t in filtered)
-                    budget_spent.append(spent)
-                    print(f"  Spent: {spent}")
-                
-                print(f"Budget limits: {budget_limits}")
-                print(f"Budget spent: {budget_spent}")
+            chart_statuses = self.budget_statuses[:6]  # Top 6 budgets
+            if chart_statuses:
+                budget_names = [s.get('category_path') or 'All' for s in chart_statuses]
+                budget_limits = [s.get('budget_amount', 0) for s in chart_statuses]
+                budget_spent = [s.get('spent_amount', 0) for s in chart_statuses]
                 
                 fig, ax = plt.subplots(figsize=(7, 5.5), facecolor='white')
                 fig.patch.set_facecolor('white')
@@ -2909,9 +2457,9 @@ class BudgetAppMainWindow(QMainWindow):
                 width = 0.35
                 
                 # Use color palette for budget vs spent bars
-                bars1 = ax.bar([i - width/2 for i in x], budget_limits, width, label='Budget', 
+                ax.bar([i - width/2 for i in x], budget_limits, width, label='Budget', 
                               color=COLOR_PALETTE['primary'], alpha=0.8, edgecolor=COLOR_PALETTE['primary_dark'], linewidth=1.5)
-                bars2 = ax.bar([i + width/2 for i in x], budget_spent, width, label='Spent', 
+                ax.bar([i + width/2 for i in x], budget_spent, width, label='Spent', 
                               color=COLOR_PALETTE['warning'], alpha=0.8, edgecolor=COLOR_PALETTE['danger'], linewidth=1.5)
                 
                 # Add value labels on bars
@@ -2961,7 +2509,6 @@ class BudgetAppMainWindow(QMainWindow):
                 y_pos = range(len(categories))
                 
                 # Use our color palette with gradient from primary to warning
-                import matplotlib.colors as mcolors
                 cmap = mcolors.LinearSegmentedColormap.from_list(
                     'budget_gradient', 
                     [COLOR_PALETTE['primary_dark'], COLOR_PALETTE['primary'], COLOR_PALETTE['primary_light']]
@@ -3052,12 +2599,11 @@ class BudgetAppMainWindow(QMainWindow):
                 self.income_chart_label.setText("<center><br><br><b>No income data yet</b><br>Add income transactions</center>")
                 
         except Exception as e:
-            print(f"Error updating dashboard: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Error updating dashboard: {e}")
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     app = QApplication(sys.argv)
     window = BudgetAppMainWindow()
     window.show()

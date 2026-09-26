@@ -1,41 +1,6 @@
 @echo off
-REM Budget App Frontend Startup Script for Windows
-
-echo.
-echo 🧾 Budget App Frontend
-echo ==========================================
-echo.
-
-REM Check if Python is installed
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python not found. Please install Python 3.8+
-    echo Visit: https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
-
-echo ✓ Python found
-
-REM Check if dependencies are installed
-python -c "from PySide6.QtWidgets import QApplication" >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo ⚠️  Dependencies not installed. Running setup...
-    python setup.py
-    if errorlevel 1 (
-        echo ERROR: Setup failed
-        pause
-        exit /b 1
-    )
-)
-
-echo.
-echo Starting Frontend...
-echo Make sure the backend is running on http://localhost:8000
-echo.
-
-cd /d frontend
-python main.py
-
-pause
+REM Budget App - desktop UI only (start the backend first)
+cd /d "%~dp0"
+python --version >nul 2>&1 || (echo Python not found. Install Python 3.9+ from https://www.python.org/downloads/ & pause & exit /b 1)
+python -c "import PySide6" >nul 2>&1 || python install.py || (pause & exit /b 1)
+python run_frontend.py

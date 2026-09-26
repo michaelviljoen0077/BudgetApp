@@ -1,12 +1,16 @@
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 venv/
 venv*/
-node_modules/
 .idea/
+.vscode/
 *.egg-info/
 build/
 dist/
 *.log
 .env
+
+# Personal financial data
+backend/data/
